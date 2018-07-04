@@ -1,0 +1,130 @@
+# Set the path
+import os, sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+import unittest
+import sqlalchemy
+from flask_sqlalchemy import SQLAlchemy
+
+from flask import Flask
+
+from flask_blog import app
+from flask_blog import db
+
+# need to add all models for db.create_all to work
+from author.models import *
+from blog.models import *
+
+from slugify import slugify
+
+class UserTest(unittest.TestCase):
+    def setUp(self):
+        self.db_uri = 'mysql+pymysql://%s:%s@%s/' % (app.config['DB_USERNAME'], app.config['DB_PASSWORD'], app.config['DB_HOST'])
+        app.config['TESTING'] = True
+        app.config['WTF_CSRF_ENABLED'] = False
+        app.config['BLOG_DATABASE_NAME'] = 'test_blog'
+        app.config['SQLALCHEMY_DATABASE_URI'] = self.db_uri + app.config['BLOG_DATABASE_NAME']
+        engine = sqlalchemy.create_engine(self.db_uri)
+        conn = engine.connect()
+        conn.execute("commit")
+        conn.execute("create database "  + app.config['BLOG_DATABASE_NAME'])
+        db.create_all()
+        conn.close()
+        self.app = app.test_client()
+
+    def tearDown(self):
+        db.session.remove()
+        engine = sqlalchemy.create_engine(self.db_uri)
+        conn = engine.connect()
+        conn.execute("commit")
+        conn.execute("drop database "  + app.config['BLOG_DATABASE_NAME'])
+        conn.close()
+
+    def n_test_0(self):
+        pass
+
+    def create_blog(self):
+        return self.app.post('/setup', data=dict(
+            name='My Test Blog',
+            fullname='Jorge Escobar',
+            email='jorge@fromzero.io',
+            username='jorge',
+            password='test',
+            confirm='test'
+            ),
+        follow_redirects=True)
+
+    def login(self, username, password):
+        return self.app.post('/login', data=dict(
+            username=username,
+            password=password
+        ), follow_redirects=True)
+
+    def logout(self):
+        return self.app.get('/logout', follow_redirects=True)
+
+    def register_user(self, fullname, email, username, password, confirm):
+        return self.app.post('/register', data=dict(
+            fullname=fullname,
+            email=email,
+            username=username,
+            password=password,
+            confirm=confirm
+            ),
+        follow_redirects=True)
+
+    def publish_post(self, title, body, category, new_category):
+        return self.app.post('/post', data=dict(
+            title=title,
+            body=body,
+            category=category,
+            new_category=new_category
+            ),
+        follow_redirects=True)
+
+    def create_comment(self, body):
+        return self.app.post('/comment/1', data=dict(body=body),
+        follow_redirects=True)
+
+    #Notice that our test functions begin with the word test;
+    #this allows unittest to automatically identify the method as a test to run.
+
+    def test_create_blog(self):
+        rv = self.create_blog()
+        assert 'Blog created' in str(rv.data)
+
+    def test_login_logout(self):
+        self.create_blog()
+        rv = self.login('jorge', 'test')
+        assert 'User jorge logged in' in str(rv.data)
+        rv = self.logout()
+        assert 'User logged out' in str(rv.data)
+        rv = self.login('john', 'test')
+        assert 'Author not found' in str(rv.data)
+        rv = self.login('jorge', 'wrong')
+        assert 'Incorrect password' in str(rv.data)
+
+    def test_admin(self):
+        self.create_blog()
+        self.login('jorge', 'test')
+        rv = self.app.get('/admin', follow_redirects=True)
+        assert 'Welcome, jorge' in str(rv.data)
+        rv = self.logout()
+        rv = self.register_user('John Doe', 'john@example.com', 'john', 'test', 'test')
+        assert 'Author registered!' in str(rv.data)
+        rv = self.login('john', 'test')
+        assert 'User john logged in' in str(rv.data)
+        rv = self.app.get('/admin', follow_redirects=True)
+        assert "403 Forbidden" in str(rv.data)
+
+    def test_comment(self):
+        title = 'testpost'
+        self.create_blog()
+        self.login('jorge', 'test')
+        self.publish_post(title=title, body='testing', category=None, new_category='test')
+        rv = self.create_comment(body='testcomment')
+        #print(rv.data)
+        assert "Blog post commented" in str(rv.data)
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)
